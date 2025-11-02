@@ -206,5 +206,11 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
             const scale = max_length / @sqrt(mag_sq);
             return a.scaled(scale);
         }
+
+        pub inline fn normalizeOrZero(a: Self, epsilon: T) Self {
+            const len = a.magnitude();
+            if (len <= epsilon) return Self.zero();
+            return a.scaled(@as(T, 1.0) / len);
+        }
     };
 }
