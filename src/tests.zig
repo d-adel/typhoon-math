@@ -5,6 +5,7 @@ const Random = std.Random;
 
 const Matrix = @import("matrix.zig").Matrix;
 const Quaternion = @import("quaternion.zig").Quaternion;
+const utils = @import("utils.zig");
 const Vector = @import("vector.zig").Vector;
 
 fn expectApproxEq(comptime N: usize, v: anytype, w: anytype, eps: f64) !void {
@@ -652,19 +653,17 @@ test "Performance: large vector operations" {
     const V16 = Vector(16, f32);
     var a = V16.zero();
     const b = V16.fromArray(.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
-    
+
     // Multiple operations that should benefit from SIMD
     a.add(b);
     a.mulScalar(2.0);
     const mag = a.magnitudeSq();
-    
+
     // Expected: (2 + 4 + 6 + ... + 32)^2 summed = 4 * (1 + 4 + 9 + ... + 256) = 4 * 1496 = 5984
     try testing.expectApproxEqAbs(mag, 5984.0, 1e-9);
 }
 
 // ========== Scalar Utilities Tests ==========
-
-const utils = @import("utils.zig");
 
 test "Utils: clamp scalar values" {
     try testing.expectEqual(utils.clamp(f64, 5.0, 0.0, 10.0), 5.0);
@@ -724,14 +723,14 @@ test "Utils: invSqrt for f32 and f64" {
     // f32
     const inv_sqrt_4_f32 = utils.invSqrt(f64, 4.0);
     try testing.expectApproxEqAbs(inv_sqrt_4_f32, 0.5, 1e-12);
-    
+
     const inv_sqrt_9_f32 = utils.invSqrt(f64, 9.0);
     try testing.expectApproxEqAbs(inv_sqrt_9_f32, 1.0 / 3.0, 1e-12);
-    
+
     // f64
     const inv_sqrt_4_f64 = utils.invSqrt(f64, 4.0);
     try testing.expectApproxEqAbs(inv_sqrt_4_f64, 0.5, 1e-12);
-    
+
     const inv_sqrt_9_f64 = utils.invSqrt(f64, 9.0);
     try testing.expectApproxEqAbs(inv_sqrt_9_f64, 1.0 / 3.0, 1e-12);
 }
@@ -742,11 +741,11 @@ test "Vector: lerp interpolation" {
     const V3 = Vector(3, f64);
     const a = V3.fromArray(.{ 0, 0, 0 });
     const b = V3.fromArray(.{ 10, 20, 30 });
-    
+
     const lerp0 = V3.lerp(a, b, 0.0);
     const lerp1 = V3.lerp(a, b, 1.0);
     const lerp_half = V3.lerp(a, b, 0.5);
-    
+
     try expectApproxEq(3, lerp0, a, 1e-12);
     try expectApproxEq(3, lerp1, b, 1e-12);
     try expectApproxEq(3, lerp_half, V3.fromArray(.{ 5, 10, 15 }), 1e-12);
@@ -756,7 +755,7 @@ test "Vector: distance and distanceSq" {
     const V3 = Vector(3, f64);
     const a = V3.fromArray(.{ 0, 0, 0 });
     const b = V3.fromArray(.{ 3, 4, 0 });
-    
+
     try testing.expectApproxEqAbs(V3.distance(a, b), 5.0, 1e-5);
     try testing.expectApproxEqAbs(V3.distanceSq(a, b), 25.0, 1e-5);
 }
@@ -765,10 +764,10 @@ test "Vector: project onto another vector" {
     const V3 = Vector(3, f64);
     const a = V3.fromArray(.{ 1, 1, 0 });
     const b = V3.fromArray(.{ 1, 0, 0 });
-    
+
     const proj = V3.project(a, b);
     try expectApproxEq(3, proj, V3.fromArray(.{ 1, 0, 0 }), 1e-12);
-    
+
     // Projection onto zero should return zero
     const zero = V3.zero();
     const proj_zero = V3.project(a, zero);
@@ -779,7 +778,7 @@ test "Vector: reflect across normal" {
     const V3 = Vector(3, f64);
     const v = V3.fromArray(.{ 1, -1, 0 });
     const normal = V3.fromArray(.{ 0, 1, 0 });
-    
+
     const reflected = V3.reflect(v, normal);
     try expectApproxEq(3, reflected, V3.fromArray(.{ 1, 1, 0 }), 1e-12);
 }
@@ -787,16 +786,16 @@ test "Vector: reflect across normal" {
 test "Vector: clampLength" {
     const V3 = Vector(3, f64);
     const v = V3.fromArray(.{ 3, 4, 0 });
-    
+
     // Length is 5, clamp to 3 should scale proportionally
     const clamped = V3.clampLength(v, 3.0);
     try testing.expectApproxEqAbs(clamped.magnitude(), 3.0, 1e-5);
-    
+
     // Already shorter, should remain unchanged
     const short = V3.fromArray(.{ 1, 0, 0 });
     const unchanged = V3.clampLength(short, 5.0);
     try expectApproxEq(3, unchanged, short, 1e-12);
-    
+
     // Zero vector should remain zero
     const zero = V3.zero();
     const zero_clamped = V3.clampLength(zero, 5.0);
@@ -812,11 +811,11 @@ test "Quaternion: nlerp interpolation" {
     const axis = V3.fromArray(.{ 0, 0, 1 });
     var q2 = Qf.fromAxisAngle(axis, std.math.pi / 2.0);
     q2.normalize();
-    
+
     const nlerp0 = Qf.nlerp(q1, q2, 0.0);
     const nlerp1 = Qf.nlerp(q1, q2, 1.0);
     const nlerp_half = Qf.nlerp(q1, q2, 0.5);
-    
+
     try expectApproxEq(4, nlerp0, q1, 1e-5);
     try expectApproxEq(4, nlerp1, q2, 1e-5);
     try testing.expectApproxEqAbs(nlerp_half.magnitudeSq(), 1.0, 1e-5);
@@ -829,15 +828,15 @@ test "Quaternion: slerp interpolation" {
     const axis = V3.fromArray(.{ 0, 0, 1 });
     var q2 = Qf.fromAxisAngle(axis, std.math.pi / 2.0);
     q2.normalize();
-    
+
     const slerp0 = Qf.slerp(q1, q2, 0.0);
     const slerp1 = Qf.slerp(q1, q2, 1.0);
     const slerp_half = Qf.slerp(q1, q2, 0.5);
-    
+
     try expectApproxEq(4, slerp0, q1, 1e-12);
     try expectApproxEq(4, slerp1, q2, 1e-12);
     try testing.expectApproxEqAbs(slerp_half.magnitudeSq(), 1.0, 1e-5);
-    
+
     // Slerp should produce constant angular velocity
     const slerp_quarter = Qf.slerp(q1, q2, 0.25);
     const slerp_three_quarter = Qf.slerp(q1, q2, 0.75);
@@ -849,14 +848,14 @@ test "Quaternion: angleBetween" {
     const Qf = Quaternion(f64);
     const V3 = Vector(3, f64);
     const axis = V3.fromArray(.{ 0, 0, 1 });
-    
+
     const q1 = Qf.identity();
     var q2 = Qf.fromAxisAngle(axis, std.math.pi / 2.0);
     q2.normalize();
-    
+
     const angle_between = Qf.angleBetween(q1, q2);
     try testing.expectApproxEqAbs(angle_between, std.math.pi / 2.0, 1e-12);
-    
+
     // Angle between identity and itself should be 0
     const angle_same = Qf.angleBetween(q1, q1);
     try testing.expectApproxEqAbs(angle_same, 0.0, 1e-5);
@@ -866,11 +865,11 @@ test "Quaternion: slerp with close quaternions" {
     const Qf = Quaternion(f64);
     const V3 = Vector(3, f64);
     const axis = V3.fromArray(.{ 0, 0, 1 });
-    
+
     const q1 = Qf.identity();
     var q2 = Qf.fromAxisAngle(axis, 0.001); // Very small angle
     q2.normalize();
-    
+
     // Should fall back to nlerp for close quaternions
     const result = Qf.slerp(q1, q2, 0.5);
     try testing.expectApproxEqAbs(result.magnitudeSq(), 1.0, 1e-5);
