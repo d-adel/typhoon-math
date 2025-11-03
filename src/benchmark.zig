@@ -15,6 +15,10 @@ const WarmupDivisor = 16;
 const NanosecondsPerMillisecond = 1_000_000.0;
 const Batch = 4;
 
+const Vec3Batch = typhoon_math.Vec3Batch(Batch, f32);
+const Mat3Batch = typhoon_math.Mat3Batch(Batch, f32);
+const QuatBatch = typhoon_math.QuatBatch(Batch, f32);
+
 const VectorPairCount = 256;
 const VectorEntryCount = 256;
 const MatrixPairCount = 64;
@@ -68,12 +72,6 @@ const QuaternionVecPair = struct {
     scalar_v: ScalarVec3,
 };
 
-const Vec3Batch = struct {
-    x: @Vector(Batch, f32),
-    y: @Vector(Batch, f32),
-    z: @Vector(Batch, f32),
-};
-
 const Vec3PairBatch = struct {
     a: Vec3Batch,
     b: Vec3Batch,
@@ -81,18 +79,6 @@ const Vec3PairBatch = struct {
 
 const Vec3EntryBatch = struct {
     value: Vec3Batch,
-};
-
-const Mat3Batch = struct {
-    m00: @Vector(Batch, f32),
-    m01: @Vector(Batch, f32),
-    m02: @Vector(Batch, f32),
-    m10: @Vector(Batch, f32),
-    m11: @Vector(Batch, f32),
-    m12: @Vector(Batch, f32),
-    m20: @Vector(Batch, f32),
-    m21: @Vector(Batch, f32),
-    m22: @Vector(Batch, f32),
 };
 
 const Mat3PairBatch = struct {
@@ -103,13 +89,6 @@ const Mat3PairBatch = struct {
 const MatVecBatch = struct {
     m: Mat3Batch,
     v: Vec3Batch,
-};
-
-const QuatBatch = struct {
-    w: @Vector(Batch, f32),
-    x: @Vector(Batch, f32),
-    y: @Vector(Batch, f32),
-    z: @Vector(Batch, f32),
 };
 
 const QuatPairBatch = struct {
@@ -381,67 +360,15 @@ fn axisAngleToScalarQuat(axis_vals: [3]f32, angle: f32) ScalarQuat {
 }
 
 fn makeVec3BatchFromArray(items: [Batch]Vec3) Vec3Batch {
-    var xs: [Batch]f32 = undefined;
-    var ys: [Batch]f32 = undefined;
-    var zs: [Batch]f32 = undefined;
-    inline for (0..Batch) |lane| {
-        const v = items[lane];
-        xs[lane] = v.getUnchecked(0);
-        ys[lane] = v.getUnchecked(1);
-        zs[lane] = v.getUnchecked(2);
-    }
-    return .{
-        .x = @bitCast(xs),
-        .y = @bitCast(ys),
-        .z = @bitCast(zs),
-    };
+    return Vec3Batch.fromVectors(items);
 }
 
 fn makeMat3BatchFromArray(items: [Batch]Mat3) Mat3Batch {
-    var columns: [9][Batch]f32 = undefined;
-    inline for (0..Batch) |lane| {
-        const mat = items[lane];
-        columns[0][lane] = mat.get1D(0);
-        columns[1][lane] = mat.get1D(1);
-        columns[2][lane] = mat.get1D(2);
-        columns[3][lane] = mat.get1D(3);
-        columns[4][lane] = mat.get1D(4);
-        columns[5][lane] = mat.get1D(5);
-        columns[6][lane] = mat.get1D(6);
-        columns[7][lane] = mat.get1D(7);
-        columns[8][lane] = mat.get1D(8);
-    }
-    return .{
-        .m00 = @bitCast(columns[0]),
-        .m01 = @bitCast(columns[1]),
-        .m02 = @bitCast(columns[2]),
-        .m10 = @bitCast(columns[3]),
-        .m11 = @bitCast(columns[4]),
-        .m12 = @bitCast(columns[5]),
-        .m20 = @bitCast(columns[6]),
-        .m21 = @bitCast(columns[7]),
-        .m22 = @bitCast(columns[8]),
-    };
+    return Mat3Batch.fromMatrices(items);
 }
 
 fn makeQuatBatchFromArray(items: [Batch]Quat) QuatBatch {
-    var ws: [Batch]f32 = undefined;
-    var xs: [Batch]f32 = undefined;
-    var ys: [Batch]f32 = undefined;
-    var zs: [Batch]f32 = undefined;
-    inline for (0..Batch) |lane| {
-        const q = items[lane];
-        ws[lane] = q.w();
-        xs[lane] = q.x();
-        ys[lane] = q.y();
-        zs[lane] = q.z();
-    }
-    return .{
-        .w = @bitCast(ws),
-        .x = @bitCast(xs),
-        .y = @bitCast(ys),
-        .z = @bitCast(zs),
-    };
+    return QuatBatch.fromQuaternions(items);
 }
 
 fn makeVec3PairBatch(start: usize) Vec3PairBatch {
@@ -512,138 +439,51 @@ fn makeQuatVecBatch(start: usize) QuatVecBatch {
 }
 
 inline fn vec3BatchAdd(a: Vec3Batch, b: Vec3Batch) Vec3Batch {
-    return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
+    return Vec3Batch.add(a, b);
 }
 
 inline fn vec3BatchSub(a: Vec3Batch, b: Vec3Batch) Vec3Batch {
-    return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
+    return Vec3Batch.sub(a, b);
 }
 
 inline fn vec3BatchDot(a: Vec3Batch, b: Vec3Batch) @Vector(Batch, f32) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
+    return Vec3Batch.dot(a, b);
 }
 
 inline fn vec3BatchCross(a: Vec3Batch, b: Vec3Batch) Vec3Batch {
-    return .{
-        .x = a.y * b.z - a.z * b.y,
-        .y = a.z * b.x - a.x * b.z,
-        .z = a.x * b.y - a.y * b.x,
-    };
+    return Vec3Batch.cross(a, b);
 }
 
 inline fn vec3BatchNormalize(v: Vec3Batch) Vec3Batch {
-    const epsilon: @Vector(Batch, f32) = @splat(@as(f32, 1e-12));
-    const zero: @Vector(Batch, f32) = @splat(@as(f32, 0.0));
-    const one: @Vector(Batch, f32) = @splat(@as(f32, 1.0));
-    const len_sq = vec3BatchDot(v, v);
-    const safe_len_sq = @max(len_sq, epsilon);
-    const inv_len = one / @sqrt(safe_len_sq);
-    const mask = len_sq > epsilon;
-    const selected = @select(f32, mask, inv_len, zero);
-    return .{ .x = v.x * selected, .y = v.y * selected, .z = v.z * selected };
+    return Vec3Batch.normalize(v);
 }
 
 inline fn mat3BatchMul(a: Mat3Batch, b: Mat3Batch) Mat3Batch {
-    return .{
-        .m00 = a.m00 * b.m00 + a.m01 * b.m10 + a.m02 * b.m20,
-        .m01 = a.m00 * b.m01 + a.m01 * b.m11 + a.m02 * b.m21,
-        .m02 = a.m00 * b.m02 + a.m01 * b.m12 + a.m02 * b.m22,
-        .m10 = a.m10 * b.m00 + a.m11 * b.m10 + a.m12 * b.m20,
-        .m11 = a.m10 * b.m01 + a.m11 * b.m11 + a.m12 * b.m21,
-        .m12 = a.m10 * b.m02 + a.m11 * b.m12 + a.m12 * b.m22,
-        .m20 = a.m20 * b.m00 + a.m21 * b.m10 + a.m22 * b.m20,
-        .m21 = a.m20 * b.m01 + a.m21 * b.m11 + a.m22 * b.m21,
-        .m22 = a.m20 * b.m02 + a.m21 * b.m12 + a.m22 * b.m22,
-    };
+    return Mat3Batch.mul(a, b);
 }
 
 inline fn mat3BatchMulVec(m: Mat3Batch, v: Vec3Batch) Vec3Batch {
-    return .{
-        .x = m.m00 * v.x + m.m01 * v.y + m.m02 * v.z,
-        .y = m.m10 * v.x + m.m11 * v.y + m.m12 * v.z,
-        .z = m.m20 * v.x + m.m21 * v.y + m.m22 * v.z,
-    };
+    return Mat3Batch.mulVec(m, v);
 }
 
 inline fn quatBatchMul(a: QuatBatch, b: QuatBatch) QuatBatch {
-    const aw = a.w;
-    const ax = a.x;
-    const ay = a.y;
-    const az = a.z;
-    const bw = b.w;
-    const bx = b.x;
-    const by = b.y;
-    const bz = b.z;
-
-    const t1_w = aw * bw;
-    const t1_x = aw * bx;
-    const t1_y = aw * by;
-    const t1_z = aw * bz;
-
-    const t2_w = bw * aw;
-    const t2_x = bw * ax;
-    const t2_y = bw * ay;
-    const t2_z = bw * az;
-
-    const t3_w = az * by;
-    const t3_x = ax * bx;
-    const t3_y = ay * bz;
-    const t3_z = ay * bz;
-
-    const t4_w = ay * bz;
-    const t4_x = az * by;
-    const t4_y = ax * bx;
-    const t4_z = ax * bx;
-
-    const res_w = t1_w + t2_w - (t3_w - t4_w);
-    const res_x = t1_x + t2_x + (t3_x - t4_x);
-    const res_y = t1_y + t2_y + (t3_y - t4_y);
-    const res_z = t1_z + t2_z + (t3_z - t4_z);
-
-    return .{ .w = res_w, .x = res_x, .y = res_y, .z = res_z };
+    return QuatBatch.mul(a, b);
 }
 
 inline fn quatBatchRotate(q: QuatBatch, v: Vec3Batch) Vec3Batch {
-    const q_vec = Vec3Batch{ .x = q.x, .y = q.y, .z = q.z };
-    const uv = vec3BatchCross(q_vec, v);
-    const uuv = vec3BatchCross(q_vec, uv);
-    const two: @Vector(Batch, f32) = @splat(@as(f32, 2.0));
-    const w_scale = q.w * two;
-    return vec3BatchAdd(vec3BatchAdd(v, .{
-        .x = uv.x * w_scale,
-        .y = uv.y * w_scale,
-        .z = uv.z * w_scale,
-    }), .{
-        .x = uuv.x * two,
-        .y = uuv.y * two,
-        .z = uuv.z * two,
-    });
+    return QuatBatch.rotate(q, v);
 }
 
 inline fn quatBatchNormalize(q: QuatBatch) QuatBatch {
-    const epsilon: @Vector(Batch, f32) = @splat(@as(f32, 1e-12));
-    const zero: @Vector(Batch, f32) = @splat(@as(f32, 0.0));
-    const one: @Vector(Batch, f32) = @splat(@as(f32, 1.0));
-    const len_sq = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
-    const safe_len_sq = @max(len_sq, epsilon);
-    const inv_len = one / @sqrt(safe_len_sq);
-    const mask = len_sq > epsilon;
-    const selected = @select(f32, mask, inv_len, zero);
-    return .{ .w = q.w * selected, .x = q.x * selected, .y = q.y * selected, .z = q.z * selected };
+    return QuatBatch.normalize(q);
 }
 
 inline fn reduceBits(v: @Vector(Batch, f32)) u32 {
-    const bits: @Vector(Batch, u32) = @bitCast(v);
-    return @reduce(.Add, bits);
+    return Vec3Batch.reduceBits(v);
 }
 
 inline fn reduceVec3Components(v: Vec3Batch, lane_index: usize) u32 {
-    const component = switch (lane_index % 3) {
-        0 => v.x,
-        1 => v.y,
-        else => v.z,
-    };
-    return reduceBits(component);
+    return v.reduceComponent(lane_index);
 }
 
 fn assertVectorClose(actual: @Vector(Batch, f32), expected: @Vector(Batch, f32), eps: f32, label: []const u8) void {

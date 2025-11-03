@@ -1,5 +1,9 @@
 //! Typhoon Math: vector, matrix, quaternion, and geometry utilities shared across crates.
 
+pub const batch = @import("batch.zig");
+pub const Vec3Batch = batch.Vec3Batch;
+pub const Mat3Batch = batch.Mat3Batch;
+pub const QuatBatch = batch.QuatBatch;
 pub const geometry = @import("geometry.zig");
 pub const matrix = @import("matrix.zig");
 pub const Matrix = matrix.Matrix;
