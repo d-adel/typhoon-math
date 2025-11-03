@@ -124,22 +124,33 @@ pub fn Quaternion(comptime T: type) type {
         // ========== Multiplication ==========
 
         pub inline fn mul(self: Self, b: Self) Self {
-            // SIMD-optimized quaternion multiplication using vector operations
-            const a_wwww: @Vector(4, T) = @splat(self.data[W]);
-            const b_wwww: @Vector(4, T) = @splat(b.data[W]);
+            // SIMD quaternion multiplication using the Hamilton product formula:
+            //   rw = aw*bw - ax*bx - ay*by - az*bz
+            //   rx = aw*bx + ax*bw + ay*bz - az*by
+            //   ry = aw*by - ax*bz + ay*bw + az*bx
+            //   rz = aw*bz + ax*by - ay*bx + az*bw
+            //
+            // Use @mulAdd for FMA instructions where available, and let the
+            // compiler auto-vectorize. Explicit scalar form is clearer and
+            // easier to verify correctness.
 
-            const a_zxyy: @Vector(4, T) = .{ self.data[Z], self.data[X], self.data[Y], self.data[Y] };
-            const b_yxzz: @Vector(4, T) = .{ b.data[Y], b.data[X], b.data[Z], b.data[Z] };
-            const a_yzxx: @Vector(4, T) = .{ self.data[Y], self.data[Z], self.data[X], self.data[X] };
-            const b_zyxx: @Vector(4, T) = .{ b.data[Z], b.data[Y], b.data[X], b.data[X] };
+            const aw = self.data[W];
+            const ax = self.data[X];
+            const ay = self.data[Y];
+            const az = self.data[Z];
 
-            const t1 = a_wwww * b.data;
-            const t2 = b_wwww * self.data;
-            const t3 = a_zxyy * b_yxzz;
-            const t4 = a_yzxx * b_zyxx;
+            const bw = b.data[W];
+            const bx = b.data[X];
+            const by = b.data[Y];
+            const bz = b.data[Z];
 
-            const signs: @Vector(4, T) = .{ -1, 1, 1, 1 };
-            return .{ .data = t1 + t2 + (t3 - t4) * signs };
+            // Use @mulAdd for FMA optimization
+            const rw = aw * bw - ax * bx - ay * by - az * bz;
+            const rx = @mulAdd(T, ay, bz, @mulAdd(T, ax, bw, aw * bx)) - az * by;
+            const ry = @mulAdd(T, az, bx, @mulAdd(T, ay, bw, aw * by)) - ax * bz;
+            const rz = @mulAdd(T, ax, by, @mulAdd(T, az, bw, aw * bz)) - ay * bx;
+
+            return .{ .data = .{ rw, rx, ry, rz } };
         }
 
         pub inline fn mulAssign(self: *Self, b: Self) void {

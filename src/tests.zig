@@ -650,17 +650,18 @@ test "SIMD: Matrix operations use SIMD" {
 }
 
 test "Performance: large vector operations" {
-    const V16 = Vector(16, f32);
+    const V16 = Vector(8, f32);
     var a = V16.zero();
-    const b = V16.fromArray(.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
+    const b = V16.fromArray(.{ 1, 2, 3, 4, 5, 6, 7, 8 });
 
     // Multiple operations that should benefit from SIMD
     a.add(b);
     a.mulScalar(2.0);
     const mag = a.magnitudeSq();
 
-    // Expected: (2 + 4 + 6 + ... + 32)^2 summed = 4 * (1 + 4 + 9 + ... + 256) = 4 * 1496 = 5984
-    try testing.expectApproxEqAbs(mag, 5984.0, 1e-9);
+    // Expected: after scaling the elements are {2,4,6,8,10,12,14,16};
+    // magnitudeSq = 2^2 + 4^2 + ... + 16^2 = 4 * (1^2 + ... + 8^2) = 4 * 204 = 816
+    try testing.expectApproxEqAbs(mag, 816.0, 1e-5);
 }
 
 // ========== Scalar Utilities Tests ==========

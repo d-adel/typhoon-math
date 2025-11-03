@@ -1,12 +1,12 @@
 const std = @import("std");
-const Vector = @import("vector.zig").Vector;
+
 const Matrix = @import("matrix.zig").Matrix;
 const Quaternion = @import("quaternion.zig").Quaternion;
+const Vector = @import("vector.zig").Vector;
 
 /// Batch SIMD operations for processing multiple vectors/matrices/quaternions simultaneously.
 /// Uses Structure-of-Arrays layout for optimal SIMD performance.
 /// Default batch size is 4 elements per batch operation.
-
 /// Vec3Batch: Structure-of-Arrays layout for batched 3D vector operations
 pub fn Vec3Batch(comptime Batch: usize, comptime T: type) type {
     return struct {
@@ -250,55 +250,31 @@ pub fn QuatBatch(comptime Batch: usize, comptime T: type) type {
         }
 
         pub inline fn mul(a: Self, b: Self) Self {
-            const a_wwww = a.w;
-            const b_wwww = b.w;
+            // Batched quaternion multiplication using Hamilton product formula.
+            // Each lane computes:
+            //   rw = aw*bw - ax*bx - ay*by - az*bz
+            //   rx = aw*bx + ax*bw + ay*bz - az*by
+            //   ry = aw*by - ax*bz + ay*bw + az*bx
+            //   rz = aw*bz + ax*by - ay*bx + az*bw
+            //
+            // This mirrors the implementation in Quaternion.mul
 
-            const a_zxyy_w = a.z;
-            const a_zxyy_x = a.x;
-            const a_zxyy_y = a.y;
-            const a_zxyy_z = a.y;
+            const aw = a.w;
+            const ax = a.x;
+            const ay = a.y;
+            const az = a.z;
 
-            const b_yxzz_w = b.y;
-            const b_yxzz_x = b.x;
-            const b_yxzz_y = b.z;
-            const b_yxzz_z = b.z;
+            const bw = b.w;
+            const bx = b.x;
+            const by = b.y;
+            const bz = b.z;
 
-            const a_yzxx_w = a.y;
-            const a_yzxx_x = a.z;
-            const a_yzxx_y = a.x;
-            const a_yzxx_z = a.x;
+            const rw = aw * bw - ax * bx - ay * by - az * bz;
+            const rx = aw * bx + ax * bw + ay * bz - az * by;
+            const ry = aw * by - ax * bz + ay * bw + az * bx;
+            const rz = aw * bz + ax * by - ay * bx + az * bw;
 
-            const b_zyxx_w = b.z;
-            const b_zyxx_x = b.y;
-            const b_zyxx_y = b.x;
-            const b_zyxx_z = b.x;
-
-            const t1_w = a_wwww * b.w;
-            const t1_x = a_wwww * b.x;
-            const t1_y = a_wwww * b.y;
-            const t1_z = a_wwww * b.z;
-
-            const t2_w = b_wwww * a.w;
-            const t2_x = b_wwww * a.x;
-            const t2_y = b_wwww * a.y;
-            const t2_z = b_wwww * a.z;
-
-            const t3_w = a_zxyy_w * b_yxzz_w;
-            const t3_x = a_zxyy_x * b_yxzz_x;
-            const t3_y = a_zxyy_y * b_yxzz_y;
-            const t3_z = a_zxyy_z * b_yxzz_z;
-
-            const t4_w = a_yzxx_w * b_zyxx_w;
-            const t4_x = a_yzxx_x * b_zyxx_x;
-            const t4_y = a_yzxx_y * b_zyxx_y;
-            const t4_z = a_yzxx_z * b_zyxx_z;
-
-            const res_w = t1_w + t2_w + (t3_w - t4_w) * @as(SimdVec, @splat(-1.0));
-            const res_x = t1_x + t2_x + (t3_x - t4_x) * @as(SimdVec, @splat(1.0));
-            const res_y = t1_y + t2_y + (t3_y - t4_y) * @as(SimdVec, @splat(1.0));
-            const res_z = t1_z + t2_z + (t3_z - t4_z) * @as(SimdVec, @splat(1.0));
-
-            return .{ .w = res_w, .x = res_x, .y = res_y, .z = res_z };
+            return .{ .w = rw, .x = rx, .y = ry, .z = rz };
         }
 
         pub inline fn rotate(q: Self, v: Vec3Batch(Batch, T)) Vec3Batch(Batch, T) {
