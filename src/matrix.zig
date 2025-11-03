@@ -173,6 +173,19 @@ pub fn Matrix(comptime N: usize, comptime M: usize, comptime T: type) type {
         // ========== Vector Multiplication ==========
 
         pub inline fn mulVec(self: Self, vec: Vector(M, T)) Vector(N, T) {
+            if (N == 3 and M == 3) {
+                const Simd = @Vector(4, T);
+                const vx = vec.data[0];
+                const vy = vec.data[1];
+                const vz = vec.data[2];
+                const x = @mulAdd(T, vz, self.data[idx(0, 2)], @mulAdd(T, vy, self.data[idx(0, 1)], vx * self.data[idx(0, 0)]));
+                const y = @mulAdd(T, vz, self.data[idx(1, 2)], @mulAdd(T, vy, self.data[idx(1, 1)], vx * self.data[idx(1, 0)]));
+                const z = @mulAdd(T, vz, self.data[idx(2, 2)], @mulAdd(T, vy, self.data[idx(2, 1)], vx * self.data[idx(2, 0)]));
+                return Vector(3, T){
+                    .data = Simd{ x, y, z, @as(T, 0) },
+                };
+            }
+
             var out_arr: [N]T = undefined;
             inline for (0..N) |r| {
                 const mask = comptime blk: {
@@ -181,9 +194,98 @@ pub fn Matrix(comptime N: usize, comptime M: usize, comptime T: type) type {
                     break :blk m;
                 };
                 const row: @Vector(M, T) = @shuffle(T, self.data, undefined, mask);
-                out_arr[r] = @reduce(.Add, row * vec.data);
+                const vec_mask = comptime blk: {
+                    var mm: [M]i32 = undefined;
+                    for (0..M) |i| mm[i] = @intCast(i);
+                    break :blk mm;
+                };
+                const vec_trim: @Vector(M, T) = @shuffle(T, vec.data, undefined, vec_mask);
+                out_arr[r] = @reduce(.Add, row * vec_trim);
             }
-            return .{ .data = @bitCast(out_arr) };
+            // Pad the output to match the Vector(N, T) backing (which may be larger
+            // than N due to SIMD-friendly lane counts) before bitcasting into the
+            // Vector type's internal storage.
+            const ActualOut = switch (N) {
+                1 => 2,
+                2 => 2,
+                3 => 4,
+                4 => 4,
+                5 => 8,
+                6 => 8,
+                7 => 8,
+                8 => 8,
+                else => @compileError("Matrix.mulVec: Vector size > 8 unsupported"),
+            };
+            var out_padded: [ActualOut]T = undefined;
+            inline for (0..N) |i| out_padded[i] = out_arr[i];
+            inline for (N..ActualOut) |i| out_padded[i] = @as(T, 0);
+            return .{ .data = @bitCast(out_padded) };
+        }
+
+        pub inline fn mul(self: Self, other: Self) Self {
+            // Optimized path for 3x3 matrices using SIMD
+            if (N == 3 and M == 3) {
+                const a00 = self.data[idx(0, 0)];
+                const a01 = self.data[idx(0, 1)];
+                const a02 = self.data[idx(0, 2)];
+                const a10 = self.data[idx(1, 0)];
+                const a11 = self.data[idx(1, 1)];
+                const a12 = self.data[idx(1, 2)];
+                const a20 = self.data[idx(2, 0)];
+                const a21 = self.data[idx(2, 1)];
+                const a22 = self.data[idx(2, 2)];
+
+                const b00 = other.data[idx(0, 0)];
+                const b01 = other.data[idx(0, 1)];
+                const b02 = other.data[idx(0, 2)];
+                const b10 = other.data[idx(1, 0)];
+                const b11 = other.data[idx(1, 1)];
+                const b12 = other.data[idx(1, 2)];
+                const b20 = other.data[idx(2, 0)];
+                const b21 = other.data[idx(2, 1)];
+                const b22 = other.data[idx(2, 2)];
+
+                const r00 = @mulAdd(T, a02, b20, @mulAdd(T, a01, b10, a00 * b00));
+                const r01 = @mulAdd(T, a02, b21, @mulAdd(T, a01, b11, a00 * b01));
+                const r02 = @mulAdd(T, a02, b22, @mulAdd(T, a01, b12, a00 * b02));
+
+                const r10 = @mulAdd(T, a12, b20, @mulAdd(T, a11, b10, a10 * b00));
+                const r11 = @mulAdd(T, a12, b21, @mulAdd(T, a11, b11, a10 * b01));
+                const r12 = @mulAdd(T, a12, b22, @mulAdd(T, a11, b12, a10 * b02));
+
+                const r20 = @mulAdd(T, a22, b20, @mulAdd(T, a21, b10, a20 * b00));
+                const r21 = @mulAdd(T, a22, b21, @mulAdd(T, a21, b11, a20 * b01));
+                const r22 = @mulAdd(T, a22, b22, @mulAdd(T, a21, b12, a20 * b02));
+
+                return Self.fromArray(.{
+                    r00, r01, r02,
+                    r10, r11, r12,
+                    r20, r21, r22,
+                });
+            }
+
+            // Fallback for other matrix sizes
+            var result = Self.zero();
+            var result_arr: [N * M]T = @bitCast(result.data);
+            const self_arr: [N * M]T = @bitCast(self.data);
+            const other_arr: [N * M]T = @bitCast(other.data);
+
+            inline for (0..N) |i| {
+                inline for (0..M) |j| {
+                    var sum: T = 0;
+                    inline for (0..M) |k| {
+                        sum += self_arr[i * M + k] * other_arr[k * M + j];
+                    }
+                    result_arr[i * M + j] = sum;
+                }
+            }
+
+            result.data = @bitCast(result_arr);
+            return result;
+        }
+
+        pub inline fn mulAssign(self: *Self, other: Self) void {
+            self.* = self.mul(other);
         }
 
         // ========== Transpose ==========

@@ -124,23 +124,22 @@ pub fn Quaternion(comptime T: type) type {
         // ========== Multiplication ==========
 
         pub inline fn mul(self: Self, b: Self) Self {
-            const aw = self.data[W];
-            const ax = self.data[X];
-            const ay = self.data[Y];
-            const az = self.data[Z];
-            const bw = b.data[W];
-            const bx = b.data[X];
-            const by = b.data[Y];
-            const bz = b.data[Z];
+            // SIMD-optimized quaternion multiplication using vector operations
+            const a_wwww: @Vector(4, T) = @splat(self.data[W]);
+            const b_wwww: @Vector(4, T) = @splat(b.data[W]);
 
-            return .{
-                .data = .{
-                    aw * bw - ax * bx - ay * by - az * bz,
-                    aw * bx + ax * bw + ay * bz - az * by,
-                    aw * by + ay * bw + az * bx - ax * bz,
-                    aw * bz + az * bw + ax * by - ay * bx,
-                },
-            };
+            const a_zxyy: @Vector(4, T) = .{ self.data[Z], self.data[X], self.data[Y], self.data[Y] };
+            const b_yxzz: @Vector(4, T) = .{ b.data[Y], b.data[X], b.data[Z], b.data[Z] };
+            const a_yzxx: @Vector(4, T) = .{ self.data[Y], self.data[Z], self.data[X], self.data[X] };
+            const b_zyxx: @Vector(4, T) = .{ b.data[Z], b.data[Y], b.data[X], b.data[X] };
+
+            const t1 = a_wwww * b.data;
+            const t2 = b_wwww * self.data;
+            const t3 = a_zxyy * b_yxzz;
+            const t4 = a_yzxx * b_zyxx;
+
+            const signs: @Vector(4, T) = .{ -1, 1, 1, 1 };
+            return .{ .data = t1 + t2 + (t3 - t4) * signs };
         }
 
         pub inline fn mulAssign(self: *Self, b: Self) void {
@@ -172,6 +171,22 @@ pub fn Quaternion(comptime T: type) type {
             self.data[X] += qtmp.data[X] * half;
             self.data[Y] += qtmp.data[Y] * half;
             self.data[Z] += qtmp.data[Z] * half;
+        }
+
+        pub inline fn rotate(self: Self, v: Vector(3, T)) Vector(3, T) {
+            const Vec3 = Vector(3, T);
+            const Simd = @TypeOf(v.data);
+            const q_vec = Vec3{
+                .data = Simd{ self.data[X], self.data[Y], self.data[Z], @as(T, 0) },
+            };
+            const uv = q_vec.cross(v);
+            const uuv = q_vec.cross(uv);
+            const two = @as(T, 2);
+            const uv_scale = @as(Simd, @splat(self.data[W] * two));
+            const uuv_scale = @as(Simd, @splat(two));
+            return Vec3{
+                .data = v.data + uv.data * uv_scale + uuv.data * uuv_scale,
+            };
         }
 
         // ========== Conjugate and Inverse ==========
