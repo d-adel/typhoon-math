@@ -337,6 +337,7 @@ fn initDatasets() void {
         const base = batch_idx * Batch;
         quaternion_vec_batches[batch_idx] = makeQuatVecBatch(base);
     }
+    verifyBatchConsistency();
 }
 
 fn randomVec(random: *Random) [3]f32 {
@@ -565,12 +566,41 @@ inline fn mat3BatchMulVec(m: Mat3Batch, v: Vec3Batch) Vec3Batch {
 }
 
 inline fn quatBatchMul(a: QuatBatch, b: QuatBatch) QuatBatch {
-    return .{
-        .w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-        .x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-        .y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-        .z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    };
+    const aw = a.w;
+    const ax = a.x;
+    const ay = a.y;
+    const az = a.z;
+    const bw = b.w;
+    const bx = b.x;
+    const by = b.y;
+    const bz = b.z;
+
+    const t1_w = aw * bw;
+    const t1_x = aw * bx;
+    const t1_y = aw * by;
+    const t1_z = aw * bz;
+
+    const t2_w = bw * aw;
+    const t2_x = bw * ax;
+    const t2_y = bw * ay;
+    const t2_z = bw * az;
+
+    const t3_w = az * by;
+    const t3_x = ax * bx;
+    const t3_y = ay * bz;
+    const t3_z = ay * bz;
+
+    const t4_w = ay * bz;
+    const t4_x = az * by;
+    const t4_y = ax * bx;
+    const t4_z = ax * bx;
+
+    const res_w = t1_w + t2_w - (t3_w - t4_w);
+    const res_x = t1_x + t2_x + (t3_x - t4_x);
+    const res_y = t1_y + t2_y + (t3_y - t4_y);
+    const res_z = t1_z + t2_z + (t3_z - t4_z);
+
+    return .{ .w = res_w, .x = res_x, .y = res_y, .z = res_z };
 }
 
 inline fn quatBatchRotate(q: QuatBatch, v: Vec3Batch) Vec3Batch {
@@ -614,6 +644,168 @@ inline fn reduceVec3Components(v: Vec3Batch, lane_index: usize) u32 {
         else => v.z,
     };
     return reduceBits(component);
+}
+
+fn assertVectorClose(actual: @Vector(Batch, f32), expected: @Vector(Batch, f32), eps: f32, label: []const u8) void {
+    const actual_arr: [Batch]f32 = @bitCast(actual);
+    const expected_arr: [Batch]f32 = @bitCast(expected);
+    inline for (0..Batch) |lane| {
+        if (!math.approxEqAbs(f32, actual_arr[lane], expected_arr[lane], eps)) {
+            std.debug.panic("{s}: lane {d} mismatch ({d} vs {d})", .{ label, lane, actual_arr[lane], expected_arr[lane] });
+        }
+    }
+}
+
+fn assertVec3BatchClose(actual: Vec3Batch, expected: Vec3Batch, eps: f32, label: []const u8) void {
+    const ax: [Batch]f32 = @bitCast(actual.x);
+    const ay: [Batch]f32 = @bitCast(actual.y);
+    const az: [Batch]f32 = @bitCast(actual.z);
+    const ex: [Batch]f32 = @bitCast(expected.x);
+    const ey: [Batch]f32 = @bitCast(expected.y);
+    const ez: [Batch]f32 = @bitCast(expected.z);
+    inline for (0..Batch) |lane| {
+        if (!math.approxEqAbs(f32, ax[lane], ex[lane], eps) or
+            !math.approxEqAbs(f32, ay[lane], ey[lane], eps) or
+            !math.approxEqAbs(f32, az[lane], ez[lane], eps))
+        {
+            std.debug.panic("{s}: Vec3 lane {d} mismatch", .{ label, lane });
+        }
+    }
+}
+
+fn assertMat3BatchClose(actual: Mat3Batch, expected: Mat3Batch, eps: f32, label: []const u8) void {
+    const actual_cols = [_][Batch]f32{
+        @bitCast(actual.m00),
+        @bitCast(actual.m01),
+        @bitCast(actual.m02),
+        @bitCast(actual.m10),
+        @bitCast(actual.m11),
+        @bitCast(actual.m12),
+        @bitCast(actual.m20),
+        @bitCast(actual.m21),
+        @bitCast(actual.m22),
+    };
+    const expected_cols = [_][Batch]f32{
+        @bitCast(expected.m00),
+        @bitCast(expected.m01),
+        @bitCast(expected.m02),
+        @bitCast(expected.m10),
+        @bitCast(expected.m11),
+        @bitCast(expected.m12),
+        @bitCast(expected.m20),
+        @bitCast(expected.m21),
+        @bitCast(expected.m22),
+    };
+    inline for (0..Batch) |lane| {
+        inline for (0..actual_cols.len) |elem| {
+            if (!math.approxEqAbs(f32, actual_cols[elem][lane], expected_cols[elem][lane], eps)) {
+                std.debug.panic("{s}: Mat3 lane {d} element {d} mismatch", .{ label, lane, elem });
+            }
+        }
+    }
+}
+
+fn assertQuatBatchClose(actual: QuatBatch, expected: QuatBatch, eps: f32, label: []const u8) void {
+    const aw: [Batch]f32 = @bitCast(actual.w);
+    const ax: [Batch]f32 = @bitCast(actual.x);
+    const ay: [Batch]f32 = @bitCast(actual.y);
+    const az: [Batch]f32 = @bitCast(actual.z);
+    const ew: [Batch]f32 = @bitCast(expected.w);
+    const ex: [Batch]f32 = @bitCast(expected.x);
+    const ey: [Batch]f32 = @bitCast(expected.y);
+    const ez: [Batch]f32 = @bitCast(expected.z);
+    inline for (0..Batch) |lane| {
+        if (!math.approxEqAbs(f32, aw[lane], ew[lane], eps) or
+            !math.approxEqAbs(f32, ax[lane], ex[lane], eps) or
+            !math.approxEqAbs(f32, ay[lane], ey[lane], eps) or
+            !math.approxEqAbs(f32, az[lane], ez[lane], eps))
+        {
+            std.debug.panic("{s}: Quat lane {d} mismatch", .{ label, lane });
+        }
+    }
+}
+
+fn verifyBatchConsistency() void {
+    const eps: f32 = 1e-4;
+
+    for (vector_pair_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var add_ref: [Batch]Vec3 = undefined;
+        var cross_ref: [Batch]Vec3 = undefined;
+        var dot_ref: [Batch]f32 = undefined;
+        inline for (0..Batch) |lane| {
+            const pair = vector_pairs[base + lane];
+            add_ref[lane] = Vec3.added(pair.simd_a, pair.simd_b);
+            cross_ref[lane] = Vec3.cross(pair.simd_a, pair.simd_b);
+            dot_ref[lane] = Vec3.dot(pair.simd_a, pair.simd_b);
+        }
+        const add_expected = makeVec3BatchFromArray(add_ref);
+        const cross_expected = makeVec3BatchFromArray(cross_ref);
+        const dot_expected: @Vector(Batch, f32) = @bitCast(dot_ref);
+
+        assertVec3BatchClose(vec3BatchAdd(batch.a, batch.b), add_expected, eps, "Vec3 add");
+        assertVec3BatchClose(vec3BatchCross(batch.a, batch.b), cross_expected, eps, "Vec3 cross");
+        assertVectorClose(vec3BatchDot(batch.a, batch.b), dot_expected, eps, "Vec3 dot");
+    }
+
+    for (vector_entry_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var norm_ref: [Batch]Vec3 = undefined;
+        inline for (0..Batch) |lane| {
+            norm_ref[lane] = Vec3.normalized(vector_entries[base + lane].simd);
+        }
+        const norm_expected = makeVec3BatchFromArray(norm_ref);
+        assertVec3BatchClose(vec3BatchNormalize(batch.value), norm_expected, eps, "Vec3 normalize");
+    }
+
+    for (matrix_pair_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var mul_ref: [Batch]Mat3 = undefined;
+        inline for (0..Batch) |lane| {
+            mul_ref[lane] = matrix_pairs[base + lane].simd_a.mul(matrix_pairs[base + lane].simd_b);
+        }
+        const mul_expected = makeMat3BatchFromArray(mul_ref);
+        assertMat3BatchClose(mat3BatchMul(batch.a, batch.b), mul_expected, eps, "Mat3 mul");
+    }
+
+    for (matrix_vec_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var mul_vec_ref: [Batch]Vec3 = undefined;
+        inline for (0..Batch) |lane| {
+            const entry = matrix_vec_pairs[base + lane];
+            mul_vec_ref[lane] = entry.simd_m.mulVec(entry.simd_v);
+        }
+        const mul_vec_expected = makeVec3BatchFromArray(mul_vec_ref);
+        assertVec3BatchClose(mat3BatchMulVec(batch.m, batch.v), mul_vec_expected, eps, "Mat3×Vec");
+    }
+
+    for (quaternion_pair_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var mul_ref: [Batch]Quat = undefined;
+        inline for (0..Batch) |lane| {
+            const pair = quaternion_pairs[base + lane];
+            mul_ref[lane] = pair.simd_a.mul(pair.simd_b);
+        }
+        const mul_expected = makeQuatBatchFromArray(mul_ref);
+        assertQuatBatchClose(quatBatchMul(batch.a, batch.b), mul_expected, eps, "Quat mul");
+    }
+
+    for (quaternion_vec_batches, 0..) |batch, batch_idx| {
+        const base = batch_idx * Batch;
+        var rotate_ref: [Batch]Vec3 = undefined;
+        var norm_ref: [Batch]Quat = undefined;
+        inline for (0..Batch) |lane| {
+            const entry = quaternion_vec_pairs[base + lane];
+            rotate_ref[lane] = entry.simd_q.rotate(entry.simd_v);
+            var q = entry.simd_q;
+            q.normalize();
+            norm_ref[lane] = q;
+        }
+        const rotate_expected = makeVec3BatchFromArray(rotate_ref);
+        const norm_expected = makeQuatBatchFromArray(norm_ref);
+        assertVec3BatchClose(quatBatchRotate(batch.q, batch.v), rotate_expected, eps, "Quat rotate");
+        assertQuatBatchClose(quatBatchNormalize(batch.q), norm_expected, eps, "Quat normalize");
+    }
 }
 
 fn runBenchmarkCase(case: BenchmarkCase) !void {
