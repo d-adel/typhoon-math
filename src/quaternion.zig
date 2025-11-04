@@ -9,6 +9,14 @@ pub fn Quaternion(comptime T: type) type {
         const Self = @This();
         data: @Vector(4, T),
 
+        inline fn mutData(self: *Self) *[4]T {
+            return @ptrCast(&self.data);
+        }
+
+        inline fn valueArray(self: Self) [4]T {
+            return @bitCast(self.data);
+        }
+
         const W: usize = 0;
         const X: usize = 1;
         const Y: usize = 2;
@@ -70,7 +78,7 @@ pub fn Quaternion(comptime T: type) type {
         }
 
         pub inline fn zero() Self {
-            return .{ .data = @splat(@as(T, 0)) };
+            return .{ .data = @bitCast([4]T{ @as(T, 0), @as(T, 0), @as(T, 0), @as(T, 0) }) };
         }
 
         pub inline fn fromAxisAngle(axis: Vector(3, T), angle: T) Self {
@@ -108,7 +116,8 @@ pub fn Quaternion(comptime T: type) type {
         // ========== Magnitude ==========
 
         pub inline fn magnitudeSq(self: Self) T {
-            return @reduce(.Add, self.data * self.data);
+            const arr = self.valueArray();
+            return dot4(arr, arr);
         }
 
         pub inline fn normalize(self: *Self) void {
@@ -118,7 +127,8 @@ pub fn Quaternion(comptime T: type) type {
                 return;
             }
             const inv_len = @as(T, 1) / @sqrt(d);
-            self.data *= @as(@Vector(4, T), @splat(inv_len));
+            const dst = self.mutData();
+            inline for (0..4) |i| dst.*[i] *= inv_len;
         }
 
         // ========== Multiplication ==========
@@ -186,18 +196,16 @@ pub fn Quaternion(comptime T: type) type {
 
         pub inline fn rotate(self: Self, v: Vector(3, T)) Vector(3, T) {
             const Vec3 = Vector(3, T);
-            const Simd = @TypeOf(v.data);
-            const q_vec = Vec3{
-                .data = Simd{ self.data[X], self.data[Y], self.data[Z], @as(T, 0) },
-            };
-            const uv = q_vec.cross(v);
-            const uuv = q_vec.cross(uv);
+            const q_vec = Vec3.fromArray(.{ self.data[X], self.data[Y], self.data[Z] });
+            var uv = Vec3.cross(q_vec, v);
+            var uuv = Vec3.cross(q_vec, uv);
             const two = @as(T, 2);
-            const uv_scale = @as(Simd, @splat(self.data[W] * two));
-            const uuv_scale = @as(Simd, @splat(two));
-            return Vec3{
-                .data = v.data + uv.data * uv_scale + uuv.data * uuv_scale,
-            };
+            uv.mulScalar(self.data[W] * two);
+            uuv.mulScalar(two);
+            var result = v;
+            result.add(uv);
+            result.add(uuv);
+            return result;
         }
 
         // ========== Conjugate and Inverse ==========
@@ -216,21 +224,23 @@ pub fn Quaternion(comptime T: type) type {
             }
             self.conjugate();
             const inv = @as(T, 1) / m2;
-            self.data *= @as(@Vector(4, T), @splat(inv));
+            const dst = self.mutData();
+            inline for (0..4) |i| dst.*[i] *= inv;
         }
 
         pub inline fn nlerp(a: Self, b: Self, t: T) Self {
             const one_minus_t = @as(T, 1) - t;
-            var result: Self = .{
-                .data = a.data * @as(@Vector(4, T), @splat(one_minus_t)) +
-                    b.data * @as(@Vector(4, T), @splat(t)),
-            };
-            result.normalize();
-            return result;
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var result: [4]T = undefined;
+            inline for (0..4) |i| result[i] = lhs[i] * one_minus_t + rhs[i] * t;
+            var q = Self.fromArray(result);
+            q.normalize();
+            return q;
         }
 
         pub inline fn slerp(a: Self, b: Self, t: T) Self {
-            var cos_theta = @reduce(.Add, a.data * b.data);
+            var cos_theta = dot4(a.valueArray(), b.valueArray());
 
             if (cos_theta > @as(T, 0.9995)) {
                 return nlerp(a, b, t);
@@ -238,11 +248,12 @@ pub fn Quaternion(comptime T: type) type {
 
             var b_adjusted = b;
             if (cos_theta < 0) {
-                b_adjusted.data = -b_adjusted.data;
+                const dst = b_adjusted.mutData();
+                inline for (0..4) |i| dst.*[i] = -dst.*[i];
                 cos_theta = -cos_theta;
             }
 
-            cos_theta = if (cos_theta > @as(T, 1)) @as(T, 1) else cos_theta;
+            if (cos_theta > @as(T, 1)) cos_theta = @as(T, 1);
 
             const theta = std.math.acos(cos_theta);
             const sin_theta = @sin(theta);
@@ -254,19 +265,24 @@ pub fn Quaternion(comptime T: type) type {
             const ratio_a = @sin((@as(T, 1) - t) * theta) / sin_theta;
             const ratio_b = @sin(t * theta) / sin_theta;
 
-            return .{
-                .data = a.data * @as(@Vector(4, T), @splat(ratio_a)) +
-                    b_adjusted.data * @as(@Vector(4, T), @splat(ratio_b)),
-            };
+            const lhs = a.valueArray();
+            const rhs = b_adjusted.valueArray();
+            var result: [4]T = undefined;
+            inline for (0..4) |i| result[i] = lhs[i] * ratio_a + rhs[i] * ratio_b;
+            return .{ .data = @bitCast(result) };
         }
 
         pub inline fn angleBetween(a: Self, b: Self) T {
-            const dot_product = @reduce(.Add, a.data * b.data);
-            const clamped = if (@abs(dot_product) > @as(T, 1))
-                if (dot_product > 0) @as(T, 1) else @as(T, -1)
-            else
-                dot_product;
-            return @as(T, 2) * std.math.acos(@abs(clamped));
+            var dot_product = dot4(a.valueArray(), b.valueArray());
+            if (dot_product > @as(T, 1)) dot_product = @as(T, 1);
+            if (dot_product < @as(T, -1)) dot_product = @as(T, -1);
+            return @as(T, 2) * std.math.acos(@abs(dot_product));
+        }
+
+        inline fn dot4(a_vals: [4]T, b_vals: [4]T) T {
+            var sum: T = 0;
+            inline for (0..4) |i| sum = @mulAdd(T, a_vals[i], b_vals[i], sum);
+            return sum;
         }
     };
 }

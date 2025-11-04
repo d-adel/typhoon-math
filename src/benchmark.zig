@@ -206,12 +206,19 @@ const ScalarQuat = struct {
     }
 };
 
+const WorkFn = *const fn (iterations: usize) u32;
+
+const BenchmarkVariant = struct {
+    label: []const u8,
+    work: WorkFn,
+};
+
 const BenchmarkCase = struct {
     name: []const u8,
     iterations: usize,
     warmup_override: ?usize = null,
-    simd_work: WorkFn,
-    scalar_work: WorkFn,
+    baseline_index: usize,
+    variants: []const BenchmarkVariant,
 };
 
 const BenchmarkSample = struct {
@@ -227,7 +234,7 @@ const BenchmarkStats = struct {
     stddev_ns: f64,
 };
 
-const WorkFn = *const fn (iterations: usize) u32;
+const MaxVariants = 4;
 
 fn initDatasets() void {
     var prng = Random.DefaultPrng.init(0x5182_b7d6_ecec_9c45);
@@ -649,57 +656,60 @@ fn verifyBatchConsistency() void {
 }
 
 fn runBenchmarkCase(case: BenchmarkCase) !void {
+    std.debug.assert(case.variants.len > 0);
+    std.debug.assert(case.variants.len <= MaxVariants);
+    std.debug.assert(case.baseline_index < case.variants.len);
+
     const warmup_iters = computeWarmupIterations(case);
 
-    var simd_samples: [SampleCount]u64 = undefined;
-    var scalar_samples: [SampleCount]u64 = undefined;
-    var simd_sorted: [SampleCount]u64 = undefined;
-    var scalar_sorted: [SampleCount]u64 = undefined;
+    var samples: [MaxVariants][SampleCount]u64 = undefined;
+    var sorted: [MaxVariants][SampleCount]u64 = undefined;
+    var stats_storage: [MaxVariants]BenchmarkStats = undefined;
+    var checksums: [MaxVariants]u32 = undefined;
 
-    var expected_simd_checksum: ?u32 = null;
-    var expected_scalar_checksum: ?u32 = null;
-
-    for (0..SampleCount) |i| {
-        const simd_sample = try measure(case.simd_work, warmup_iters, case.iterations);
-        const scalar_sample = try measure(case.scalar_work, warmup_iters, case.iterations);
-
-        if (expected_simd_checksum) |expected| {
-            if (expected != simd_sample.checksum) {
-                std.debug.panic("SIMD checksum mismatch for {s}: expected {d}, got {d}", .{ case.name, expected, simd_sample.checksum });
+    for (case.variants, 0..) |variant, variant_idx| {
+        var expected_checksum: ?u32 = null;
+        for (0..SampleCount) |sample_idx| {
+            const sample = try measure(variant.work, warmup_iters, case.iterations);
+            if (expected_checksum) |expected| {
+                if (expected != sample.checksum) {
+                    std.debug.panic(
+                        "Checksum mismatch for {s} variant {s}: expected {d}, got {d}",
+                        .{ case.name, variant.label, expected, sample.checksum },
+                    );
+                }
+            } else {
+                expected_checksum = sample.checksum;
             }
-        } else {
-            expected_simd_checksum = simd_sample.checksum;
+            samples[variant_idx][sample_idx] = sample.ns;
         }
-
-        if (expected_scalar_checksum) |expected| {
-            if (expected != scalar_sample.checksum) {
-                std.debug.panic("Scalar checksum mismatch for {s}: expected {d}, got {d}", .{ case.name, expected, scalar_sample.checksum });
-            }
-        } else {
-            expected_scalar_checksum = scalar_sample.checksum;
-        }
-
-        simd_samples[i] = simd_sample.ns;
-        scalar_samples[i] = scalar_sample.ns;
+        checksums[variant_idx] = expected_checksum.?;
+        stats_storage[variant_idx] = computeStats(SampleCount, &samples[variant_idx], &sorted[variant_idx]);
     }
 
-    const simd_stats = computeStats(SampleCount, &simd_samples, &simd_sorted);
-    const scalar_stats = computeStats(SampleCount, &scalar_samples, &scalar_sorted);
+    const baseline_stats = stats_storage[case.baseline_index];
+    const baseline_label = case.variants[case.baseline_index].label;
 
-    const median_speedup = @as(f64, @floatFromInt(scalar_stats.median_ns)) / @as(f64, @floatFromInt(simd_stats.median_ns));
+    std.debug.print("{s} [baseline: {s}] (iters: {d})\n", .{ case.name, baseline_label, case.iterations });
 
-    std.debug.print(
-        "{s:<20} {d:7.3} ±{d:5.3} ms   {d:7.3} ±{d:5.3} ms   {d:6.2}x   iters: {d}\n",
-        .{
-            case.name,
-            nsToMsInt(simd_stats.median_ns),
-            nsToMsFloat(simd_stats.stddev_ns),
-            nsToMsInt(scalar_stats.median_ns),
-            nsToMsFloat(scalar_stats.stddev_ns),
-            median_speedup,
-            case.iterations,
-        },
-    );
+    for (case.variants, 0..) |variant, variant_idx| {
+        const stats = stats_storage[variant_idx];
+        const speedup = @as(f64, @floatFromInt(baseline_stats.median_ns)) /
+            @as(f64, @floatFromInt(stats.median_ns));
+        std.debug.print(
+            "  {s:<14} {d:7.3} ±{d:5.3} ms   med {d:7.3} ms   {d:6.2}x   checksum 0x{X:08}\n",
+            .{
+                variant.label,
+                nsToMsFloat(stats.mean_ns),
+                nsToMsFloat(stats.stddev_ns),
+                nsToMsInt(stats.median_ns),
+                speedup,
+                checksums[variant_idx],
+            },
+        );
+    }
+
+    std.debug.print("\n", .{});
 }
 
 fn measure(work: WorkFn, warmup_iters: usize, iterations: usize) !BenchmarkSample {
@@ -965,6 +975,14 @@ fn matrixVecScalar(iterations: usize) u32 {
     return checksum;
 }
 
+inline fn selectScalarComponent(v: ScalarVec3, lane: usize) f32 {
+    return switch (lane) {
+        0 => v.x,
+        1 => v.y,
+        else => v.z,
+    };
+}
+
 fn quaternionMulSimd(iterations: usize) u32 {
     std.debug.assert(iterations % Batch == 0);
     const passes = iterations / Batch;
@@ -1030,14 +1048,6 @@ fn quaternionRotateScalar(iterations: usize) u32 {
     return checksum;
 }
 
-inline fn selectScalarComponent(v: ScalarVec3, lane: usize) f32 {
-    return switch (lane) {
-        0 => v.x,
-        1 => v.y,
-        else => v.z,
-    };
-}
-
 inline fn nextLane(current: usize, count: usize) usize {
     const next = current + 1;
     return if (next == count) 0 else next;
@@ -1046,31 +1056,56 @@ inline fn nextLane(current: usize, count: usize) usize {
 pub fn main() !void {
     initDatasets();
 
-    const cases = [_]BenchmarkCase{
-        .{ .name = "Vec3 Add", .iterations = 4_000_000, .simd_work = vectorAddSimd, .scalar_work = vectorAddScalar },
-        .{ .name = "Vec3 Dot", .iterations = 20_000_000, .simd_work = vectorDotSimd, .scalar_work = vectorDotScalar },
-        .{ .name = "Vec3 Cross", .iterations = 8_000_000, .simd_work = vectorCrossSimd, .scalar_work = vectorCrossScalar },
-        .{ .name = "Vec3 Normalize", .iterations = 6_000_000, .simd_work = vectorNormalizeSimd, .scalar_work = vectorNormalizeScalar },
-        .{ .name = "Mat3 × Mat3", .iterations = 1_000_000, .simd_work = matrixMulSimd, .scalar_work = matrixMulScalar },
-        .{ .name = "Mat3 × Vec3", .iterations = 4_000_000, .simd_work = matrixVecSimd, .scalar_work = matrixVecScalar },
-        .{ .name = "Quat Mul", .iterations = 4_000_000, .simd_work = quaternionMulSimd, .scalar_work = quaternionMulScalar },
-        .{ .name = "Quat Rotate", .iterations = 10_000_000, .simd_work = quaternionRotateSimd, .scalar_work = quaternionRotateScalar },
+    const vec3_add_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = vectorAddSimd },
+        .{ .label = "scalar", .work = vectorAddScalar },
+    };
+    const vec3_dot_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = vectorDotSimd },
+        .{ .label = "scalar", .work = vectorDotScalar },
+    };
+    const vec3_cross_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = vectorCrossSimd },
+        .{ .label = "scalar", .work = vectorCrossScalar },
+    };
+    const vec3_normalize_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = vectorNormalizeSimd },
+        .{ .label = "scalar", .work = vectorNormalizeScalar },
+    };
+    const mat3_mul_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = matrixMulSimd },
+        .{ .label = "scalar", .work = matrixMulScalar },
+    };
+    const mat3_vec_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = matrixVecSimd },
+        .{ .label = "scalar", .work = matrixVecScalar },
+    };
+    const quat_mul_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = quaternionMulSimd },
+        .{ .label = "scalar", .work = quaternionMulScalar },
+    };
+    const quat_rotate_variants = [_]BenchmarkVariant{
+        .{ .label = "batch-simd", .work = quaternionRotateSimd },
+        .{ .label = "scalar", .work = quaternionRotateScalar },
     };
 
-    std.debug.print("\n=== Typhoon Math SIMD vs Scalar Benchmarks ===\n", .{});
+    const cases = [_]BenchmarkCase{
+        .{ .name = "Vec3 Add", .iterations = 4_000_000, .baseline_index = vec3_add_variants.len - 1, .variants = vec3_add_variants[0..] },
+        .{ .name = "Vec3 Dot", .iterations = 20_000_000, .baseline_index = vec3_dot_variants.len - 1, .variants = vec3_dot_variants[0..] },
+        .{ .name = "Vec3 Cross", .iterations = 8_000_000, .baseline_index = vec3_cross_variants.len - 1, .variants = vec3_cross_variants[0..] },
+        .{ .name = "Vec3 Normalize", .iterations = 6_000_000, .baseline_index = vec3_normalize_variants.len - 1, .variants = vec3_normalize_variants[0..] },
+        .{ .name = "Mat3 × Mat3", .iterations = 1_000_000, .baseline_index = mat3_mul_variants.len - 1, .variants = mat3_mul_variants[0..] },
+        .{ .name = "Mat3 × Vec3", .iterations = 4_000_000, .baseline_index = mat3_vec_variants.len - 1, .variants = mat3_vec_variants[0..] },
+        .{ .name = "Quat Mul", .iterations = 4_000_000, .baseline_index = quat_mul_variants.len - 1, .variants = quat_mul_variants[0..] },
+        .{ .name = "Quat Rotate", .iterations = 10_000_000, .baseline_index = quat_rotate_variants.len - 1, .variants = quat_rotate_variants[0..] },
+    };
+
+    std.debug.print("\n=== Typhoon Math Benchmarks ===\n", .{});
     std.debug.print("Samples per case: {d}, warmup divisor: {d}\n\n", .{ SampleCount, WarmupDivisor });
-    std.debug.print("{s:<20} {s:>16}   {s:>18}   {s:>8}   {s:>8}\n", .{
-        "Benchmark",
-        "SIMD median",
-        "Scalar median",
-        "Speedup",
-        "iters",
-    });
-    std.debug.print("{s:-<20} {s:-<16}   {s:-<18}   {s:-<8}   {s:-<8}\n", .{ "", "", "", "", "" });
 
     for (cases) |case| {
         try runBenchmarkCase(case);
     }
 
-    std.debug.print("\n=== Benchmark Complete ===\n", .{});
+    std.debug.print("=== Benchmark Complete ===\n", .{});
 }

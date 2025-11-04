@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Matrix = @import("matrix.zig").Matrix;
 const Quaternion = @import("quaternion.zig").Quaternion;
-const Vector = @import("vector.zig").Vector;
+pub const Vector = @import("vector.zig").Vector;
 
 /// Batch SIMD operations for processing multiple vectors/matrices/quaternions simultaneously.
 /// Uses Structure-of-Arrays layout for optimal SIMD performance.

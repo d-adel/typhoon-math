@@ -188,11 +188,12 @@ pub fn AABB(comptime T: type) type {
         }
 
         pub inline fn expanded(a: @This(), margin: T) @This() {
-            const m = @as(@TypeOf(a.lowerBound.data), @splat(margin));
-            return .{
-                .lowerBound = .{ .data = a.lowerBound.data - m },
-                .upperBound = .{ .data = a.upperBound.data + m },
-            };
+            const delta = Vec3.fromArray(.{ margin, margin, margin });
+            var lower = a.lowerBound;
+            lower.sub(delta);
+            var upper = a.upperBound;
+            upper.add(delta);
+            return .{ .lowerBound = lower, .upperBound = upper };
         }
 
         pub fn area(a: @This()) T {

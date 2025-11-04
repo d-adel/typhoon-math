@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const x86 = std.Target.x86;
 
 /// Generic N-dimensional vector using SIMD operations.
 /// Provides common vector operations with optimal SIMD performance.
@@ -30,6 +29,18 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
         // target for AVX2/FMA codegen. The align(32) is a hint to the compiler
         // and helps prevent misaligned vector loads/stores on some targets.
         data: Simd align(SimdAlignment),
+
+        inline fn mutData(self: *Self) *[ActualN]T {
+            return @ptrCast(&self.data);
+        }
+
+        inline fn constData(self: *const Self) *const [ActualN]T {
+            return @ptrCast(&self.data);
+        }
+
+        inline fn valueArray(self: Self) [ActualN]T {
+            return @bitCast(self.data);
+        }
 
         // ========== Construction ==========
 
@@ -96,7 +107,9 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
         }
 
         pub inline fn zero() Self {
-            return .{ .data = @splat(@as(T, 0)) };
+            var tmp: [ActualN]T = undefined;
+            inline for (0..ActualN) |i| tmp[i] = @as(T, 0);
+            return .{ .data = @bitCast(tmp) };
         }
 
         // ========== Element Access ==========
@@ -124,131 +137,186 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
         // ========== Basic Operations (Mutating) ==========
 
         pub inline fn clear(self: *Self) void {
-            self.data = @splat(@as(T, 0));
+            const dst = self.mutData();
+            inline for (0..ActualN) |i| dst.*[i] = @as(T, 0);
         }
 
         pub inline fn add(self: *Self, other: Self) void {
-            // Use a local temporary to make combined load/add/store patterns
-            // more explicit for the optimizer.
-            var tmp = self.data;
-            tmp += other.data;
-            self.data = tmp;
+            const dst = self.mutData();
+            const src = other.valueArray();
+            inline for (0..N) |i| dst.*[i] += src[i];
         }
 
         pub inline fn sub(self: *Self, other: Self) void {
-            self.data -= other.data;
+            const dst = self.mutData();
+            const src = other.valueArray();
+            inline for (0..N) |i| dst.*[i] -= src[i];
         }
 
         pub inline fn mul(self: *Self, other: Self) void {
-            self.data *= other.data;
+            const dst = self.mutData();
+            const src = other.valueArray();
+            inline for (0..N) |i| dst.*[i] *= src[i];
         }
 
         pub inline fn mulScalar(self: *Self, k: T) void {
-            self.data *= @as(@TypeOf(self.data), @splat(k));
+            const dst = self.mutData();
+            inline for (0..N) |i| dst.*[i] *= k;
         }
 
         pub inline fn negate(self: *Self) void {
-            self.data = -self.data;
+            const dst = self.mutData();
+            inline for (0..N) |i| dst.*[i] = -dst.*[i];
         }
 
         pub inline fn normalize(self: *Self) void {
+            const dst = self.mutData();
             if (N == 3 and @typeInfo(T) == .float) {
-                const x = self.data[0];
-                const y = self.data[1];
-                const z = self.data[2];
+                const x = dst.*[0];
+                const y = dst.*[1];
+                const z = dst.*[2];
                 const len_sq = @mulAdd(T, z, z, @mulAdd(T, y, y, x * x));
                 if (len_sq == 0) return;
                 const inv_len = @as(T, 1) / @sqrt(len_sq);
-                self.data = Simd{ x * inv_len, y * inv_len, z * inv_len, @as(T, 0) };
+                dst.*[0] = x * inv_len;
+                dst.*[1] = y * inv_len;
+                dst.*[2] = z * inv_len;
+                if (ActualN > 3) dst.*[3] = @as(T, 0);
                 return;
             }
-            const sum = sumSquares(self.data);
+            const sum = sumSquaresPtr(self.constData());
             if (sum == 0) return;
             const inv = fastRsqrt(sum);
-            self.data *= @as(@TypeOf(self.data), @splat(inv));
+            inline for (0..N) |i| dst.*[i] *= inv;
         }
 
         // ========== Basic Operations (Non-mutating) ==========
 
         pub inline fn added(a: Self, b: Self) Self {
-            return .{ .data = a.data + b.data };
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = lhs[i] + rhs[i];
+            inline for (N..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn subbed(a: Self, b: Self) Self {
-            return .{ .data = a.data - b.data };
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = lhs[i] - rhs[i];
+            inline for (N..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn scaled(a: Self, k: T) Self {
-            return .{ .data = a.data * @as(@TypeOf(a.data), @splat(k)) };
+            const src = a.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = src[i] * k;
+            inline for (N..ActualN) |i| out[i] = src[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn normalized(a: Self) Self {
+            const src = a.valueArray();
             if (N == 3 and @typeInfo(T) == .float) {
-                const x = a.data[0];
-                const y = a.data[1];
-                const z = a.data[2];
+                const x = src[0];
+                const y = src[1];
+                const z = src[2];
                 const len_sq = @mulAdd(T, z, z, @mulAdd(T, y, y, x * x));
                 if (len_sq == 0) return a;
                 const inv_len = @as(T, 1) / @sqrt(len_sq);
-                return .{ .data = Simd{ x * inv_len, y * inv_len, z * inv_len, @as(T, 0) } };
+                var out: [ActualN]T = src;
+                out[0] = x * inv_len;
+                out[1] = y * inv_len;
+                out[2] = z * inv_len;
+                if (ActualN > 3) out[3] = @as(T, 0);
+                return .{ .data = @bitCast(out) };
             }
-            const sum = sumSquares(a.data);
+            const sum = sumSquaresPtr(&src);
             if (sum == 0) return a;
             const inv = fastRsqrt(sum);
-            return .{ .data = a.data * @as(@TypeOf(a.data), @splat(inv)) };
+            var out: [ActualN]T = src;
+            inline for (0..N) |i| out[i] *= inv;
+            return .{ .data = @bitCast(out) };
         }
 
         // ========== Vector Products ==========
 
         pub inline fn dot(a: Self, b: Self) T {
-            return dotSimd(a.data, b.data);
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var sum: T = 0;
+            inline for (0..N) |i| sum = @mulAdd(T, lhs[i], rhs[i], sum);
+            return sum;
         }
 
         pub inline fn cross(a: Self, b: Self) Self {
             comptime {
                 if (N != 3) @compileError("cross is only defined for 3D vectors");
             }
-            // SIMD implementation using two shuffles and vector ops.
-            // For N==3 we back the vector with ActualN==4 lanes, so we
-            // perform 4-lane shuffles where the 4th lane is a padding lane
-            // (kept zero). Masks pick y,z,x in lanes 0..2 and leave lane 3
-            // untouched so the padding remains zero.
-            const m_yzx: [ActualN]i32 = if (ActualN == 4) .{ 1, 2, 0, 3 } else if (ActualN == 8) .{ 1, 2, 0, 3, 4, 5, 6, 7 } else .{ 1, 2 };
-            const m_zxy: [ActualN]i32 = if (ActualN == 4) .{ 2, 0, 1, 3 } else if (ActualN == 8) .{ 2, 0, 1, 3, 4, 5, 6, 7 } else .{ 2, 0 };
-
-            const a_yzx = @shuffle(T, a.data, undefined, m_yzx);
-            const a_zxy = @shuffle(T, a.data, undefined, m_zxy);
-            const b_yzx = @shuffle(T, b.data, undefined, m_yzx);
-            const b_zxy = @shuffle(T, b.data, undefined, m_zxy);
-
-            const res: @TypeOf(a.data) = a_yzx * b_zxy - a_zxy * b_yzx;
-            return .{ .data = res };
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = lhs;
+            out[0] = lhs[1] * rhs[2] - lhs[2] * rhs[1];
+            out[1] = lhs[2] * rhs[0] - lhs[0] * rhs[2];
+            out[2] = lhs[0] * rhs[1] - lhs[1] * rhs[0];
+            inline for (3..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
         }
 
         // ========== Magnitude ==========
 
         pub inline fn magnitude(a: Self) T {
-            return @sqrt(sumSquares(a.data));
+            const arr = a.valueArray();
+            return @sqrt(sumSquaresPtr(&arr));
         }
 
         pub inline fn magnitudeSq(a: Self) T {
-            return sumSquares(a.data);
+            const arr = a.valueArray();
+            return sumSquaresPtr(&arr);
         }
 
         // ========== Comparison ==========
 
         pub inline fn min(a: Self, b: Self) Self {
-            return .{ .data = @min(a.data, b.data) };
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = if (lhs[i] < rhs[i]) lhs[i] else rhs[i];
+            inline for (N..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn max(a: Self, b: Self) Self {
-            return .{ .data = @max(a.data, b.data) };
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = if (lhs[i] > rhs[i]) lhs[i] else rhs[i];
+            inline for (N..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
+        }
+
+        pub inline fn abs(a: Self) Self {
+            const src = a.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| {
+                const v = src[i];
+                out[i] = if (v < 0) -v else v;
+            }
+            inline for (N..ActualN) |i| out[i] = src[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn lerp(a: Self, b: Self, t: T) Self {
-            const t_vec = @as(@TypeOf(a.data), @splat(t));
-            const one_minus_t_vec = @as(@TypeOf(a.data), @splat(@as(T, 1) - t));
-            return .{ .data = a.data * one_minus_t_vec + b.data * t_vec };
+            const one_minus_t = @as(T, 1) - t;
+            const lhs = a.valueArray();
+            const rhs = b.valueArray();
+            var out: [ActualN]T = undefined;
+            inline for (0..N) |i| out[i] = lhs[i] * one_minus_t + rhs[i] * t;
+            inline for (N..ActualN) |i| out[i] = lhs[i];
+            return .{ .data = @bitCast(out) };
         }
 
         pub inline fn distance(a: Self, b: Self) T {
@@ -285,8 +353,15 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
             return a.scaled(@as(T, 1.0) / len);
         }
 
-        inline fn sumSquares(vec: @Vector(ActualN, T)) T {
-            return dotSimd(vec, vec);
+        inline fn sumSquares(vec: Simd) T {
+            const arr: [ActualN]T = @bitCast(vec);
+            return sumSquaresPtr(&arr);
+        }
+
+        inline fn sumSquaresPtr(ptr: *const [ActualN]T) T {
+            var sum: T = 0;
+            inline for (0..N) |i| sum = @mulAdd(T, ptr.*[i], ptr.*[i], sum);
+            return sum;
         }
 
         inline fn fastRsqrt(value: T) T {
@@ -314,10 +389,6 @@ pub fn Vector(comptime N: usize, comptime T: type) type {
                 return @as(T, y);
             }
             return @as(T, 1) / @sqrt(value);
-        }
-
-        inline fn dotSimd(a_vec: Simd, b_vec: Simd) T {
-            return @reduce(.Add, a_vec * b_vec);
         }
     };
 }
