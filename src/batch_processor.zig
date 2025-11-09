@@ -1,5 +1,4 @@
 // High-level batching API for SIMD processing
-// Provides clean abstractions for batch operations to eliminate boilerplate
 
 const std = @import("std");
 
