@@ -24,5 +24,8 @@ pub const Vector = vector.Vector;
 
 // High-level batch processors for clean, boilerplate-free batch operations
 test {
-    _ = @import("tests.zig");
+    _ = @import("test/vector_matrix.zig");
+    _ = @import("test/geometry.zig");
+    _ = @import("test/batch.zig");
+    _ = @import("test/support.zig");
 }

@@ -10,6 +10,7 @@ A high-performance, SIMD-optimized mathematical library for 3D graphics, physics
 - **Comprehensive**: Vectors, matrices, quaternions, geometry primitives, and collision support functions
 - **Type-Safe**: Compile-time generic programming ensures type safety and zero-cost abstractions
 - **Well-Tested**: Extensive test coverage including edge cases and numerical stability
+- **Dedicated Test Suites**: Geometry, SIMD batch helpers, and support mappings each have their own unit suites so regressions surface immediately
 
 ## Modules
 
@@ -185,6 +186,11 @@ zig build run
 # Build for specific target
 zig build -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast
 ```
+
+### Testing & Benchmarks
+
+- **Unit tests** – Run `zig test src/root.zig` (or `zig build test` from the repo root) to execute every math suite. All test cases live under `src/test/` (split into vector/matrix, geometry, batch, and support files) so additions stay organized by domain.
+- **Microbenchmarks** – `zig build benchmark` compares the SIMD batch helpers against scalar reference implementations on the current machine. Treat these numbers as kernel-level signals: they run single-threaded on cache-friendly workloads and don’t account for batching/marshaling overhead in a full physics pipeline.
 
 ## Design Philosophy
 
