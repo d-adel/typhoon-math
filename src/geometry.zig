@@ -44,6 +44,59 @@ pub fn Hull(comptime T: type) type {
     };
 }
 
+pub fn Mesh(comptime T: type) type {
+    return struct {
+        const TriangleData = struct {
+            verts: [3]Vector(3, T),
+            active_edges: [3]bool, // edges: 0=(v0,v1),1=(v1,v2),2=(v2,v0)
+        };
+
+        pub const Triangle = TriangleData;
+
+        pub const TriangleMetadata = struct {
+            normal: Vector(3, T),
+            plane_distance: T,
+            neighbor_indices: [3]i32,
+            active_edge_mask: u8,
+        };
+
+        pub const BvhNode = struct {
+            min: Vector(3, T),
+            max: Vector(3, T),
+            left: i32,
+            right: i32,
+            tri_start: i32,
+            tri_count: i32,
+        };
+
+        triangles: []const TriangleData,
+        triangle_metadata: []const TriangleMetadata = &.{},
+        triangle_indices: []const u32 = &.{},
+        // Optional acceleration structure for traversal; empty when not built.
+        bvh_nodes: []const BvhNode = &.{},
+    };
+}
+
+pub fn HeightField(comptime T: type) type {
+    return struct {
+        pub const CellMetadata = struct {
+            min_corner: Vector(3, T),
+            max_corner: Vector(3, T),
+            row: u32,
+            col: u32,
+            active_edge_mask: u8,
+        };
+
+        // Heights are sampled on a regular grid in X/Z; y = height.
+        heights: []const T,
+        rows: usize,
+        cols: usize,
+        cell_size: Vector(2, T), // x,z spacing
+        origin: Vector(3, T), // lower-left corner in world space
+        cell_metadata: []const CellMetadata = &.{},
+    };
+}
+
 pub fn Scaled(comptime T: type) type {
     const ShapeT = Shape(T);
     return struct {
@@ -59,6 +112,8 @@ pub fn Shape(comptime T: type) type {
         capsule: Capsule(T),
         cylinder: Cylinder(T),
         hull: Hull(T),
+        mesh: Mesh(T),
+        heightfield: HeightField(T),
         scaled: Scaled(T),
     };
 }

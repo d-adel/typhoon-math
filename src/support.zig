@@ -31,6 +31,8 @@ pub fn supportLocal(comptime T: type, shape: geometry.Shape(T), dir: Vector(3, T
         .capsule => |c| supportCapsule(T, c, dir),
         .cylinder => |c| supportCylinder(T, c, dir),
         .hull => |h| supportHull(T, h, dir),
+        .mesh => unreachable,
+        .heightfield => unreachable,
         .scaled => |s| supportScaled(T, s, dir),
     };
 }
