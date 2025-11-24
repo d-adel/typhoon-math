@@ -30,10 +30,14 @@ pub fn supportLocal(comptime T: type, shape: geometry.Shape(T), dir: Vector(3, T
         .box => |b| supportBox(T, b, dir),
         .capsule => |c| supportCapsule(T, c, dir),
         .cylinder => |c| supportCylinder(T, c, dir),
+        .tapered_capsule => |c| supportTaperedCapsule(T, c, dir),
+        .tapered_cylinder => |c| supportTaperedCylinder(T, c, dir),
         .hull => |h| supportHull(T, h, dir),
         .mesh => unreachable,
         .heightfield => unreachable,
         .scaled => |s| supportScaled(T, s, dir),
+        .compound => |c| supportCompoundChildren(T, c.children, dir),
+        .mutable_compound => |c| supportCompoundChildren(T, c.children, dir),
     };
 }
 
@@ -97,6 +101,67 @@ fn supportCylinder(comptime T: type, c: geometry.Cylinder(T), dir: Vector(3, T))
     return Vec3.fromArray(.{ px, axial, pz });
 }
 
+fn supportTaperedCylinder(comptime T: type, c: geometry.TaperedCylinder(T), dir: Vector(3, T)) Vector(3, T) {
+    const Vec3 = Vector(3, T);
+    const planar_len = @sqrt(dir.data[0] * dir.data[0] + dir.data[2] * dir.data[2]);
+
+    const top_y = c.half_height;
+    const bottom_y = -c.half_height;
+
+    var top_point = Vec3.fromArray(.{ 0.0, top_y, 0.0 });
+    var bottom_point = Vec3.fromArray(.{ 0.0, bottom_y, 0.0 });
+
+    if (planar_len > 1e-12) {
+        const top_scale = c.top_radius / planar_len;
+        top_point.data[0] = dir.data[0] * top_scale;
+        top_point.data[2] = dir.data[2] * top_scale;
+
+        const bottom_scale = c.bottom_radius / planar_len;
+        bottom_point.data[0] = dir.data[0] * bottom_scale;
+        bottom_point.data[2] = dir.data[2] * bottom_scale;
+    }
+
+    const top_dot = Vec3.dot(top_point, dir);
+    const bottom_dot = Vec3.dot(bottom_point, dir);
+    return if (top_dot >= bottom_dot) top_point else bottom_point;
+}
+
+fn supportTaperedCapsule(comptime T: type, c: geometry.TaperedCapsule(T), dir: Vector(3, T)) Vector(3, T) {
+    const Vec3 = Vector(3, T);
+    const n = safeNormalize(T, dir);
+
+    const top_center = Vec3.fromArray(.{ 0.0, c.half_height, 0.0 });
+    var top = top_center;
+    var scaled_top = n;
+    scaled_top.mulScalar(c.top_radius);
+    top.add(scaled_top);
+
+    const bottom_center = Vec3.fromArray(.{ 0.0, -c.half_height, 0.0 });
+    var bottom = bottom_center;
+    var scaled_bottom = n;
+    scaled_bottom.mulScalar(c.bottom_radius);
+    bottom.add(scaled_bottom);
+
+    const side = supportTaperedCylinder(T, .{
+        .half_height = c.half_height,
+        .top_radius = c.top_radius,
+        .bottom_radius = c.bottom_radius,
+    }, dir);
+
+    const top_dot = Vec3.dot(top, dir);
+    const bottom_dot = Vec3.dot(bottom, dir);
+    const side_dot = Vec3.dot(side, dir);
+
+    var best = top;
+    var best_dot = top_dot;
+    if (bottom_dot > best_dot) {
+        best = bottom;
+        best_dot = bottom_dot;
+    }
+    if (side_dot > best_dot) best = side;
+    return best;
+}
+
 fn supportHull(comptime T: type, h: geometry.Hull(T), dir: Vector(3, T)) Vector(3, T) {
     const Vec3 = Vector(3, T);
     if (h.verts.len == 0) return Vec3.zero();
@@ -124,4 +189,23 @@ fn supportScaled(comptime T: type, s: geometry.Scaled(T), dir: Vector(3, T)) Vec
     var point = base_support;
     _ = point.mul(scale);
     return point;
+}
+
+fn supportCompoundChildren(comptime T: type, children: []const geometry.CompoundChild(T), dir: Vector(3, T)) Vector(3, T) {
+    const Vec3 = Vector(3, T);
+    if (children.len == 0) return Vec3.zero();
+
+    var best = Vec3.zero();
+    var best_dot: T = -std.math.inf(T);
+    for (children) |child| {
+        const local_dir = child.pose.worldToLocalDir(dir);
+        const local_support = supportLocal(T, child.shape.*, local_dir);
+        const world_support = child.pose.localToWorldPoint(local_support);
+        const dot_val = Vec3.dot(world_support, dir);
+        if (dot_val > best_dot) {
+            best_dot = dot_val;
+            best = world_support;
+        }
+    }
+    return best;
 }

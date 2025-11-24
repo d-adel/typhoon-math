@@ -38,6 +38,22 @@ pub fn Cylinder(comptime T: type) type {
     };
 }
 
+pub fn TaperedCapsule(comptime T: type) type {
+    return struct {
+        half_height: T,
+        top_radius: T,
+        bottom_radius: T,
+    };
+}
+
+pub fn TaperedCylinder(comptime T: type) type {
+    return struct {
+        half_height: T,
+        top_radius: T,
+        bottom_radius: T,
+    };
+}
+
 pub fn Hull(comptime T: type) type {
     return struct {
         verts: []const Vector(3, T),
@@ -105,16 +121,41 @@ pub fn Scaled(comptime T: type) type {
     };
 }
 
+pub fn CompoundChild(comptime T: type) type {
+    const ShapeT = Shape(T);
+    const PoseT = Pose(T);
+    return struct {
+        shape: *const ShapeT,
+        pose: PoseT,
+    };
+}
+
+pub fn Compound(comptime T: type) type {
+    return struct {
+        children: []const CompoundChild(T),
+    };
+}
+
+pub fn MutableCompound(comptime T: type) type {
+    return struct {
+        children: []CompoundChild(T),
+    };
+}
+
 pub fn Shape(comptime T: type) type {
     return union(enum) {
         sphere: Sphere(T),
         box: Box(T),
         capsule: Capsule(T),
         cylinder: Cylinder(T),
+        tapered_capsule: TaperedCapsule(T),
+        tapered_cylinder: TaperedCylinder(T),
         hull: Hull(T),
         mesh: Mesh(T),
         heightfield: HeightField(T),
         scaled: Scaled(T),
+        compound: Compound(T),
+        mutable_compound: MutableCompound(T),
     };
 }
 

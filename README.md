@@ -216,7 +216,7 @@ All generic functions are resolved at compile-time. Inline functions ensure no o
 
 ## Compatibility
 
-- **Zig Version**: 0.15.0 or later
+- **Zig Version**: 0.16.0 or later (matches Typhoon’s baseline to keep ReleaseFast builds stable)
 - **Platforms**: Any platform with SIMD support (x86_64, ARM64, WASM with simd128)
 - **Precision**: f32, f64 (generic over float types)
 - **Freestanding**: Compatible with freestanding targets (WASM, embedded)
